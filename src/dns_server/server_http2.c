@@ -90,6 +90,10 @@ static void _dns_server_http2_process_stream(struct dns_server_conn_tls_client *
 	}
 
 	if (strcasecmp(method, "POST") == 0) {
+		if (http2_stream_get_ex_data(stream)) {
+			return;
+		}
+		http2_stream_set_ex_data(stream, (void *)1);
 		/* Read request body */
 		len = http2_stream_read_body(stream, buf, sizeof(buf));
 		if (len < 0) {
@@ -231,7 +235,7 @@ int _dns_server_process_http2(struct dns_server_conn_tls_client *tls_client, str
 			http2_ctx_close(ctx);
 			return -1;
 		}
-		
+
 		tls_client->http2_ctx = ctx;
 	}
 
@@ -304,7 +308,7 @@ int _dns_server_process_http2(struct dns_server_conn_tls_client *tls_client, str
 				if (poll_items[i].stream && poll_items[i].readable) {
 					_dns_server_http2_process_stream(tls_client, poll_items[i].stream);
 				}
-				
+
 				if (poll_items[i].stream) {
 					http2_stream_put(poll_items[i].stream); /* Release poll reference */
 				}
