@@ -411,13 +411,13 @@ static int _dns_client_http2_pending_data(struct dns_conn_stream *stream, struct
 										  struct dns_query_struct *query, void *packet, int len, int epoll_events)
 {
 	struct epoll_event event;
-	
+
 	/* Validate input parameters */
 	if (len <= 0 || len > DNS_IN_PACKSIZE - 128) {
 		errno = EINVAL;
 		return -1;
 	}
-	
+
 	if (DNS_TCP_BUFFER - stream->send_buff.len < len) {
 		errno = ENOMEM;
 		return -1;
@@ -559,9 +559,6 @@ int _dns_client_send_http2(struct dns_server_info *server_info, struct dns_query
 	/* Flush data immediately */
 	if (http2_ctx != NULL) {
 		_dns_client_flush_http2_writes(http2_ctx);
-	}
-
-	if (http2_ctx != NULL) {
 		_dns_client_http2_mod_epoll_events(server_info, _dns_client_http2_ctx_events(http2_ctx));
 	}
 
@@ -603,6 +600,10 @@ static int _dns_client_http2_init_ctx(struct dns_server_info *server_info)
 		ret = http2_ctx_handshake(http2_ctx);
 		if (ret < 0) {
 			tlog(TLOG_ERROR, "http2 handshake failed.");
+			pthread_mutex_lock(&server_info->lock);
+			server_info->http2_ctx = NULL;
+			pthread_mutex_unlock(&server_info->lock);
+			http2_ctx_put(http2_ctx);
 			return -1;
 		}
 	} else {
@@ -787,6 +788,16 @@ static int _dns_client_http2_process_read(struct dns_server_info *server_info)
 							need_put = 1;
 						}
 						pthread_mutex_unlock(&server_info->lock);
+						struct dns_query_struct *query = conn_stream->query;
+						if (query != NULL) {
+							pthread_mutex_lock(&query->lock);
+							if (!list_empty(&conn_stream->query_list)) {
+								list_del_init(&conn_stream->query_list);
+								need_put = 1;
+							}
+							pthread_mutex_unlock(&query->lock);
+							conn_stream->query = NULL;
+						}
 					}
 
 					if (need_put) {
