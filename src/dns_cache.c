@@ -56,7 +56,13 @@ static struct dns_cache_head dns_cache_head;
 
 static int _dns_cache_is_ready(void)
 {
-	return is_cache_init != 0 && dns_cache_head.cache_hash.table != NULL && dns_cache_head.cache_hash.size > 0;
+	int ready = 0;
+	pthread_mutex_lock(&dns_cache_head.lock);
+	ready = (is_cache_init != 0 && 
+			 dns_cache_head.cache_hash.table != NULL && 
+			 dns_cache_head.cache_hash.size > 0);
+	pthread_mutex_unlock(&dns_cache_head.lock);
+	return ready;
 }
 
 int dns_cache_init(int size, int mem_size, dns_cache_callback timeout_callback)
@@ -101,20 +107,23 @@ static struct dns_cache *_dns_cache_first(void)
 
 static void _dns_cache_delete(struct dns_cache *dns_cache)
 {
+	struct dns_cache_data *cache_data = NULL;
+	
 	pthread_mutex_lock(&dns_cache_head.lock);
 	hash_del(&dns_cache->node);
 	list_del_init(&dns_cache->list);
 	if (dns_timer_del(&dns_cache->timer)) {
 		tlog(TLOG_DEBUG, "dns cache timer is still pending when delete dns cache.");
 	}
-	pthread_mutex_unlock(&dns_cache_head.lock);
 	atomic_dec(&dns_cache_head.num);
 	atomic_sub(sizeof(*dns_cache), &dns_cache_head.mem_size);
-	if (dns_cache->cache_data) {
-		dns_cache_data_put(dns_cache->cache_data);
-	}
-
+	cache_data = dns_cache->cache_data;
 	dns_cache->cache_data = NULL;
+	pthread_mutex_unlock(&dns_cache_head.lock);
+	
+	if (cache_data) {
+		dns_cache_data_put(cache_data);
+	}
 	free(dns_cache);
 }
 
@@ -569,7 +578,10 @@ int dns_cache_get_ttl(struct dns_cache *dns_cache)
 	int ttl = 0;
 	time(&now);
 
+	pthread_mutex_lock(&dns_cache_head.lock);
 	ttl = dns_cache->info.insert_time + dns_cache->info.ttl - now;
+	pthread_mutex_unlock(&dns_cache_head.lock);
+	
 	if (ttl < 0) {
 		return 0;
 	}
@@ -653,14 +665,16 @@ void dns_cache_delete(struct dns_cache *dns_cache)
 
 int dns_cache_hitnum_dec_get(struct dns_cache *dns_cache)
 {
+	int hitnum;
 	pthread_mutex_lock(&dns_cache_head.lock);
 	dns_cache->info.hitnum--;
 	if (dns_cache->info.hitnum_update_add > DNS_CACHE_HITNUM_STEP) {
 		dns_cache->info.hitnum_update_add--;
 	}
+	hitnum = dns_cache->info.hitnum;
 	pthread_mutex_unlock(&dns_cache_head.lock);
 
-	return dns_cache->info.hitnum;
+	return hitnum;
 }
 
 void dns_cache_update(struct dns_cache *dns_cache)
